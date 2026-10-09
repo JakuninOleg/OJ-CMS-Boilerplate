@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { getPayload, createLocalReq } from 'payload';
+import sharp from 'sharp';
+if (process.env.ALLOW_DISPOSABLE_TEST_DB !== 'true') throw new Error('Use a disposable database and set ALLOW_DISPOSABLE_TEST_DB=true');
+const { default: config } = await import('../src/payload.config');
+const payload = await getPayload({ config });
+try {
+  assert.equal((await payload.count({ collection: 'users' })).totalDocs, 0, 'Database must be empty');
+  const admin = await payload.create({ collection: 'users', data: { email: 'admin@example.invalid', password: randomBytes(24).toString('hex'), name: 'Администратор', role: 'administrator' } });
+  const editor = await payload.create({ collection: 'users', data: { email: 'editor@example.invalid', password: randomBytes(24).toString('hex'), name: 'Редактор', role: 'editor' } });
+  const req = await createLocalReq({ user: { ...editor, collection: 'users' } }, payload);
+  await assert.rejects(() => payload.delete({ collection: 'users', id: admin.id, req, overrideAccess: false }));
+  const unchanged = await payload.update({ collection: 'users', id: editor.id, req, overrideAccess: false, data: { role: 'administrator' } });
+  assert.equal(unchanged.role, 'editor');
+  const first = await payload.create({ collection: 'posts', req, overrideAccess: false, data: { title: 'Первая публикация', _status: 'draft' } });
+  const second = await payload.create({ collection: 'posts', req, overrideAccess: false, data: { title: 'Первая публикация', _status: 'draft' } });
+  assert.equal(first.slug, 'pervaya-publikatsiya'); assert.equal(second.slug, 'pervaya-publikatsiya-2');
+  const renamed = await payload.update({ collection: 'posts', id: first.id, req, overrideAccess: false, data: { title: 'Другой заголовок' } });
+  assert.equal(renamed.slug, first.slug);
+  const anonymous = await createLocalReq({}, payload);
+  assert.equal((await payload.find({ collection: 'posts', req: anonymous, overrideAccess: false })).totalDocs, 0);
+  await payload.update({ collection: 'posts', id: first.id, req, overrideAccess: false, data: { _status: 'published' } });
+  assert.equal((await payload.find({ collection: 'posts', req: anonymous, overrideAccess: false })).totalDocs, 1);
+  const buffer = await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#0060ff' } }).jpeg().toBuffer();
+  const media = await payload.create({ collection: 'media', req, overrideAccess: false, data: { title: 'Тестовое изображение', alt: 'Однотонное тестовое изображение' }, file: { name: 'test.jpg', mimetype: 'image/jpeg', size: buffer.length, data: buffer } });
+  for (const size of ['mobile', 'content', 'wide'] as const) assert.match(media.sizes?.[size]?.filename || '', /\.webp$/);
+  await payload.update({ collection: 'posts', id: first.id, req, overrideAccess: false, data: { cover: media.id } });
+  await assert.rejects(() => payload.delete({ collection: 'media', id: media.id }));
+  console.log('PASS: roles, drafts, publishing, unique readable slugs, image processing, reference protection');
+} finally { await payload.destroy(); }
+process.exit(0);
