@@ -25,5 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run generate:types && npm run generate:importmap
       - run: npm run lint && npm run typecheck && npm test
+      - run: npm run migrate
+        env: { NODE_ENV: production }
       - run: npm run test:integration
       - run: npm run build
